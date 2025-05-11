@@ -16,18 +16,6 @@ const TOPICS_PER_PAGE = 5;
 
 // Setup IELTS bot
 export function setupIeltsBot(bot: Bot<BotContext>) {
-  // Start IELTS exam
-  bot.command("ielts_exam", async (ctx) => {
-    ctx.session.exam = {
-      topic: "",
-      part: 0,
-      answers: [],
-      questionIndex: 0,
-      page: 0,
-    };
-    await displayTopicMenu(ctx, 0);
-  });
-
   // Handle topic selection and navigation
   bot.callbackQuery(/topic_(.+)/, async (ctx) => {
     const topic = ctx.match[1];
@@ -56,16 +44,19 @@ export function setupIeltsBot(bot: Bot<BotContext>) {
     if (!ctx.session.exam || ctx.session.exam.part === 0) return;
 
     try {
-      await ctx.reply("🔍 Analyzing your response...");
+      await ctx.reply("🔍 Processing your response...");
 
       // Convert voice to text
       const text = await convertVoiceToText(ctx);
       if (!text) throw new Error("Could not process audio");
 
+      // Show transcription immediately
+      await ctx.reply(`📜 Your response: "${text}"`);
+
       // Save answer
       ctx.session.exam.answers.push(text);
 
-      // Process the response
+      // Process the response (move to next question or analyze part)
       await processResponse(ctx, text);
     } catch (error) {
       console.error("Exam error:", error);
@@ -77,14 +68,14 @@ export function setupIeltsBot(bot: Bot<BotContext>) {
   bot.hears("Cancel Exam", async (ctx) => {
     if (ctx.session.exam) {
       delete ctx.session.exam;
-      await ctx.reply("❌ Exam cancelled. Start again with /ielts_exam");
+      await ctx.reply("❌ Exam cancelled. Start again with /assess_speaking");
     }
   });
 
   bot.command("cancel", async (ctx) => {
     if (ctx.session.exam) {
       delete ctx.session.exam;
-      await ctx.reply("❌ Exam cancelled. Start again with /ielts_exam");
+      await ctx.reply("❌ Exam cancelled. Start again with /assess_speaking");
     }
   });
 }
@@ -118,11 +109,10 @@ async function startPart1(ctx: BotContext) {
   ctx.session.exam!.questionIndex = 0;
 
   await ctx.reply(
-    `🗣️ <b>Part 1: Introduction and Interview</b>\n\n` +
+    `🗣️ Part 1: Introduction and Interview\n\n` +
       `You can cancel the exam at any time by clicking "Cancel Exam" or typing /cancel.\n\n` +
       `${QUESTIONS[topic].part1[0]}`,
     {
-      parse_mode: "HTML",
       reply_markup: new Keyboard().text("Cancel Exam").oneTime(),
     }
   );
@@ -132,47 +122,46 @@ async function processResponse(ctx: BotContext, answer: string) {
   const exam = ctx.session.exam!;
   const topic = exam.topic as IeltsTopic;
 
-  // Get feedback from DeepSeek
-  const feedback = await getDeepSeekFeedback(
-    topic,
-    answer,
-    exam.part,
-    exam.answers
-  );
-  await ctx.reply(`💬 <b>Part ${exam.part} Feedback:</b>\n${feedback}`, {
-    parse_mode: "HTML",
-  });
-
   switch (exam.part) {
     case 1:
       exam.questionIndex++;
       if (exam.questionIndex < QUESTIONS[topic].part1.length) {
+        // Ask next question
         await ctx.reply(QUESTIONS[topic].part1[exam.questionIndex], {
           reply_markup: new Keyboard().text("Cancel Exam").oneTime(),
         });
       } else {
+        // Analyze Part 1
+        const part1Feedback = await getDeepSeekFeedback(topic, exam.answers, 1);
+        await ctx.reply(`💬 Part 1 Feedback:\n${part1Feedback}`);
+
+        // Move to Part 2
         exam.part = 2;
+        exam.answers = []; // Clear answers for Part 2
+        exam.questionIndex = 0;
         await ctx.reply(
-          `🎤 <b>Part 2: Long Turn</b>\n\n${QUESTIONS[topic].part2}\n\n` +
+          `🎤 Part 2: Long Turn\n\n${QUESTIONS[topic].part2}\n\n` +
             `You have 1 minute to prepare. Please record your response.`,
-          {
-            parse_mode: "HTML",
-            reply_markup: new Keyboard().text("Cancel Exam").oneTime(),
-          }
+          { reply_markup: new Keyboard().text("Cancel Exam").oneTime() }
         );
       }
       break;
 
     case 2:
+      // Analyze Part 2
+      const part2Feedback = await getDeepSeekFeedback(topic, [answer], 2);
+      await ctx.reply(`💬 Part 2 Feedback:\n${part2Feedback}`);
+
+      // Move to Part 3
       exam.part = 3;
+      exam.answers = []; // Clear answers for Part 3
       exam.questionIndex = 0;
       const firstQuestion = await getContextualPart3Question(
         topic,
         answer,
         QUESTIONS[topic].part3[0]
       );
-      await ctx.reply(`🗣️ <b>Part 3: Discussion</b>\n\n${firstQuestion}`, {
-        parse_mode: "HTML",
+      await ctx.reply(`🗣️ Part 3: Discussion\n\n${firstQuestion}`, {
         reply_markup: new Keyboard().text("Cancel Exam").oneTime(),
       });
       break;
@@ -180,21 +169,22 @@ async function processResponse(ctx: BotContext, answer: string) {
     case 3:
       exam.questionIndex++;
       if (exam.questionIndex < 3) {
-        // 3-4 questions for Part 3
+        // Ask next contextual question
         const nextQuestion = await getContextualPart3Question(
           topic,
           answer,
           QUESTIONS[topic].part3[exam.questionIndex] || ""
         );
         await ctx.reply(nextQuestion, {
-          parse_mode: "HTML",
           reply_markup: new Keyboard().text("Cancel Exam").oneTime(),
         });
       } else {
+        // Analyze Part 3 and complete exam
+        const part3Feedback = await getDeepSeekFeedback(topic, exam.answers, 3);
         const overallFeedback = await getOverallAssessment(exam.answers);
-        await ctx.reply(`🏆 <b>Exam Completed!</b>\n\n${overallFeedback}`, {
-          parse_mode: "HTML",
-        });
+        await ctx.reply(
+          `💬 Part 3 Feedback:\n${part3Feedback}\n\n🏆 Exam Completed!\n\n${overallFeedback}`
+        );
         delete ctx.session.exam;
       }
       break;
@@ -203,29 +193,37 @@ async function processResponse(ctx: BotContext, answer: string) {
 
 async function getDeepSeekFeedback(
   topic: string,
-  answer: string,
-  part: number,
-  previousAnswers: string[]
+  answers: string[],
+  part: number
 ): Promise<string> {
   const response = await deepseek.chat.completions.create({
     model: "deepseek-chat",
     messages: [
       {
         role: "system",
-        content: `You are an IELTS examiner. Analyze this Part ${part} response about ${topic}. 
-        - Point out grammatical, lexical, or pronunciation errors (if detectable from text).
-        - Suggest specific improvements to maximize the band score.
-        - Provide a corrected version of the response targeting a Band 8-9.
-        - Estimate the band score (1-9) for Fluency, Coherence, Lexical Resource, Grammar, and Pronunciation.
-        - Consider previous answers: ${previousAnswers.join("\n\n---\n\n")}`,
+        content: `You are a strict IELTS examiner assessing a Part ${part} response on the topic "${topic}". Follow these guidelines:
+        - Analyze the response for Fluency and Coherence, Lexical Resource, Grammatical Range and Accuracy, and Pronunciation (inferred from text).
+        - Identify specific errors (e.g., grammar mistakes, limited vocabulary, lack of coherence).
+        - Suggest precise improvements to achieve a Band 8-9.
+        - Provide a corrected version of the response targeting Band 8-9.
+        - Assign band scores (1-9) for each criterion based on IELTS rubrics:
+          - Fluency: Penalize hesitations, short answers, or lack of development.
+          - Coherence: Penalize disorganized or incomplete ideas.
+          - Lexical Resource: Penalize basic or repetitive vocabulary.
+          - Grammar: Penalize errors or overly simple structures.
+          - Pronunciation: Infer from text; penalize unclear or repetitive phrasing.
+        - Be strict: A short, vague response like "I work on some stuff" should score 4-5 due to lack of detail, basic vocabulary, and limited grammar.
+        - Overall band is the average of the four criteria.
+        - Format feedback clearly without Markdown (** or ##). Use plain text with sections: Errors, Improvements, Corrected Response, Band Scores.
+        - If multiple answers are provided (e.g., Part 1), analyze them collectively.`,
       },
-      { role: "user", content: answer },
+      { role: "user", content: answers.join("\n\n---\n\n") },
     ],
     temperature: 0.7,
     max_tokens: 1000,
   });
 
-  return response.choices[0].message.content ?? "No feedback available";
+  return response.choices[0].message.content ?? "No feedback available.";
 }
 
 async function getContextualPart3Question(
@@ -261,13 +259,16 @@ async function getOverallAssessment(answers: string[]): Promise<string> {
     messages: [
       {
         role: "system",
-        content: `You are an IELTS examiner. Provide an overall assessment for these answers:
-        - Fluency and Coherence (1-9)
-        - Lexical Resource (1-9)
-        - Grammatical Range and Accuracy (1-9)
-        - Pronunciation (1-9)
-        - Overall Band (1-9)
-        - Detailed feedback with strengths and areas for improvement`,
+        content: `You are a strict IELTS examiner providing an overall assessment for a full IELTS Speaking test. Analyze all answers:
+        - Assign band scores (1-9) for:
+          - Fluency and Coherence
+          - Lexical Resource
+          - Grammatical Range and Accuracy
+          - Pronunciation (inferred from text)
+        - Calculate the overall band as the average of the four criteria.
+        - Provide detailed feedback on strengths and areas for improvement.
+        - Be strict: Short, vague answers (e.g., "I work on some stuff") should score 4-5.
+        - Format without Markdown (** or ##). Use plain text with sections: Band Scores, Feedback.`,
       },
       { role: "user", content: answers.join("\n\n---\n\n") },
     ],
@@ -275,5 +276,5 @@ async function getOverallAssessment(answers: string[]): Promise<string> {
     max_tokens: 1500,
   });
 
-  return response.choices[0].message.content ?? "No assessment available";
+  return response.choices[0].message.content ?? "No assessment available.";
 }

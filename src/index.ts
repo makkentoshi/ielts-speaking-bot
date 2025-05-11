@@ -4,17 +4,14 @@ import { run } from "@grammyjs/runner";
 import { config } from "./config";
 import { setupIeltsBot } from "./ielts";
 import { setupSpanishBot } from "./spanish";
-import { db } from "./database";
+import { db, getSessionStorage } from "./database";
 import { userMiddleware } from "./middlewares";
-import { ExamSession } from "./interfaces";
-
-// Define session data to include ExamSession for IELTS
-interface SessionData {
-  exam?: ExamSession;
-}
+import { ExamSession, SessionData } from "./interfaces";
 
 // Extend BotContext to include session and conversation flavors
-type BotContext = Context & SessionFlavor<SessionData> & ConversationFlavor<Context>;
+type BotContext = Context &
+  SessionFlavor<SessionData> &
+  ConversationFlavor<Context>;
 
 async function bootstrap() {
   // Initialize database
@@ -25,7 +22,12 @@ async function bootstrap() {
   const bot = new Bot<BotContext>(config.BOT_TOKEN);
 
   // Middleware (session must come first)
-  bot.use(session({ initial: (): SessionData => ({}) }));
+  bot.use(
+    session({
+      initial: (): SessionData => ({}),
+      storage: getSessionStorage(),
+    })
+  );
   bot.use(conversations());
   bot.use(userMiddleware);
 
@@ -53,26 +55,48 @@ Send a voice message during IELTS practice to have your speaking assessed.`);
   // Register assess_speaking command
   bot.command("assess_speaking", async (ctx) => {
     // Initialize exam session
-    ctx.session.exam = { topic: "", part: 0, answers: [], questionIndex: 0, page: 0 };
-    
+    ctx.session.exam = {
+      topic: "",
+      part: 0,
+      answers: [],
+      questionIndex: 0,
+      page: 0,
+    };
+
     // Trigger IELTS topic selection menu
     const keyboard = new InlineKeyboard();
     const TOPICS_PER_PAGE = 5;
     const topics = [
-      "Work", "Study", "Hometown", "Family", "Friends",
-      "Food", "Travel", "Sports", "Music", "Movies",
-      "Books", "Technology", "Health", "Shopping", "Environment",
-      "Art", "Daily Routine", "Weather", "Future Plans", "Hobbies"
+      "Work",
+      "Study",
+      "Hometown",
+      "Family",
+      "Friends",
+      "Food",
+      "Travel",
+      "Sports",
+      "Music",
+      "Movies",
+      "Books",
+      "Technology",
+      "Health",
+      "Shopping",
+      "Environment",
+      "Art",
+      "Daily Routine",
+      "Weather",
+      "Future Plans",
+      "Hobbies",
     ].slice(0, TOPICS_PER_PAGE);
 
-    topics.forEach(topic => {
+    topics.forEach((topic) => {
       keyboard.text(topic, `topic_${topic}`).row();
     });
     keyboard.text("Random Topic", "topic_Random").row();
     keyboard.text("Next ➡️", "page_1");
 
     await ctx.reply("📝 Choose an IELTS Speaking topic:", {
-      reply_markup: keyboard
+      reply_markup: keyboard,
     });
   });
 
@@ -94,7 +118,9 @@ Send a voice message during IELTS practice to have your speaking assessed.`);
 
     if (err.ctx) {
       try {
-        await err.ctx.reply("⚠️ Service error occurred. Please try again later.");
+        await err.ctx.reply(
+          "⚠️ Service error occurred. Please try again later."
+        );
       } catch (e) {
         console.error("Failed to send error message:", e);
       }

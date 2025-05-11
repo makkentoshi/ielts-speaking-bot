@@ -60,3 +60,9 @@ export interface ExamSession {
 export type BotContext = Context & {
   session: { exam?: ExamSession };
 } & ConversationFlavor<Context>;
+
+export interface SessionData {
+  key?: string;
+  value?: any;
+  exam?: ExamSession;
+}

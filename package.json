@@ -15,6 +15,7 @@
   "dependencies": {
     "@grammyjs/conversations": "^2.1.0",
     "@grammyjs/runner": "^2.0.3",
+    "@grammyjs/storage-mongodb": "^2.5.1",
     "deepseek": "^0.0.2",
     "dotenv": "^16.5.0",
     "ffmpeg-static": "^5.2.0",
@@ -22,7 +23,8 @@
     "grammy": "^1.36.1",
     "mongodb": "^6.16.0",
     "node-fetch": "^3.3.2",
-    "openai": "^4.97.0"
+    "nodejs-whisper": "^0.2.6",
+    "openai": "^4.98.0"
   },
   "devDependencies": {
     "@types/fluent-ffmpeg": "^2.1.27",
